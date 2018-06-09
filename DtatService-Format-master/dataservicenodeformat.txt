@@ -1,0 +1,523 @@
+
+    DAtabase Service
+	|
+    | server folder
+	|	|
+	|	|
+	|	|-- DBOprations folder
+	|	|	|
+	|	|	|---MYSQLOperation.js
+	|	|
+	|	|--APIHandler.js
+	|	|--AppConfig.js
+	|	|--global.js
+	|	|--Logger.js
+	|	|	
+	|
+	|---server.js
+	|---config.json
+	|---package.jsson
+     
+
+	 
+
+
+
+
+  MYSQLDBOperation.js
+  ======================
+  const FILE_NAME = ' MySQLOperations.js ';
+var dummyData;
+const fs = require('fs');
+const mysql = require('mysql');
+const appconfig = require('../appconfig');
+const config = appconfig.readconfig();
+const Q = require('q');
+const moment = require('moment');
+var cronJob = require('cron').CronJob;
+var LoggingDir = config.server.LoggingDir;
+if(LoggingDir == undefined)
+LoggingDir = "./logs/";
+
+if ( !fs.existsSync( LoggingDir ) ) {
+	// Create the directory if it does not exist
+	fs.mkdirSync( LoggingDir );
+}
+const FifoArray = require('fifo-array');
+var queryRespArray = new FifoArray(100);
+queryRespArray.max = config.server.QueryRespCount || 100; 
+
+
+var currntdate = moment(new Date()).format("YYYYMMDD");
+var logDir = LoggingDir + currntdate;
+
+if ( !fs.existsSync( logDir ) ) {
+	// Create the directory if it does not exist
+	fs.mkdirSync( logDir );
+}
+
+var queryRespfilename = logDir + "/" + currntdate + "_queryResp.log";
+
+var loginJob = new cronJob({
+	cronTime : '10 00 00 * * *',	
+    onTick : updateLogFile,
+    start : true,
+    timezone : 'Asia/Kolkata'
+});
+
+function updateLogFile(){
+	currntdate = moment(new Date()).format("YYYYMMDD");
+	logDir = LoggingDir + currntdate;
+	if ( !fs.existsSync( logDir ) ) {
+		// Create the directory if it does not exist
+		fs.mkdirSync( logDir );
+	}	
+	queryRespfilename = logDir + "/" + currntdate + "_queryResp.log";
+}
+
+//Module wise logging
+// const DBlogger = require('../logger.js');
+
+
+// var logger = new DBlogger();
+// logger.initialize("MySQLOperations", 'error');
+
+const dbconfig = {
+    host: config.db.server,
+    user: config.db.user,
+    password: config.db.password,
+    database: config.db.name,
+    multipleStatements: true
+};
+
+var connection;
+
+function handleDisconnect() {
+    try {
+        const FUNC_NAME = " handleDisconnect() ";
+        connection = mysql.createConnection(dbconfig); // Recreate the connection, since
+        connection.connect(function (err) {              // The server is either down
+            if (err) {                                     // or restarting (takes a while sometimes).
+                console.log(err.message + FUNC_NAME);
+                setTimeout(handleDisconnect, 2000); // We introduce a delay before attempting to reconnect,
+            } else {
+                console.log("Database Connected with ID " + connection.threadId);
+              
+            }                                     // to avoid a hot loop, and to allow our node script to
+        });                                     // process asynchronous requests in the meantime.
+        // If you're also serving http, display a 503 error.
+        connection.on('error', function (err) {
+            handleDisconnect(); 
+            console.log(err + FUNC_NAME);
+            if (err.code === 'PROTOCOL_CONNECTION_LOST' || err.code === 'ECONNRESET' ) { // Connection to the MySQL server is usually
+                handleDisconnect();                         // lost due to either server restart, or a
+            } else {                                      // connnection idle timeout (the wait_timeout
+                throw err;                                  // server variable configures this)
+            }
+        });
+        
+    } catch (err) {
+        console.log(err.message + FUNC_NAME);
+       
+    }
+};
+
+        handleDisconnect();
+    var heartBeatMysql = function(){
+        var currntdatetime = moment(new Date()).format("YYYY-MM-DD HH:mm:ss");
+        console.log(currntdatetime + " heartBeatMysql() called");
+        var FUNC_NAME = " heartBeatMysql()";
+        try{
+        var query = "select 1;";
+        connection.query(query, function (err, rows, fields) {
+                    if (err) {
+                        console.log(err.message + FUNC_NAME);                    
+                    }                
+                });
+        }catch(err){
+            console.log(err.message + FUNC_NAME);
+        }
+    }
+    setInterval(heartBeatMysql,30*60*1000);
+
+module.exports = {
+    executequery: function (query) {
+        const FUNC_NAME = " executequery() ";
+        var logObj = {};
+        logObj.timestamp = moment(new Date()).format("YYYY-DD-MM HH:mm:ss:ms");
+        try {                        
+            var deferred = Q.defer();
+            var result = {};
+            logObj.query = query;
+            connection.query(query, function (err, rows, fields) {
+                if (err) {
+                   
+                    logObj.response = err.message;
+                    queryRespArray.push(logObj);
+                    fs.appendFile(queryRespfilename, JSON.stringify(logObj) + "\n", function (err) {
+                        if (err) console.log(err.message);
+                    });
+                    deferred.reject(err);
+                }
+                else {                    
+                    logObj.response = rows;
+                    queryRespArray.push(logObj);
+                    fs.appendFile(queryRespfilename, JSON.stringify(logObj) + "\n", function (err) {
+                        if (err) console.log(err.message);
+                    });
+                    deferred.resolve(rows);
+                }
+            });
+            return deferred.promise;
+        } catch (err) {
+            console.log(err.message + FUNC_NAME);
+           
+        }
+    },
+
+   
+
+};
+==End================
+
+=====Config.json========
+{
+  "db": {
+    "user": "root",
+    "password": "",
+    "server": "",
+    "name": "",
+    "port": ""
+  },
+  "LoggingConf":{
+  "appenders": {
+    "out": { "type": "file","filename" : "out.log" ,"layout": { "type": "json", "separator": "," } }
+  },
+  "categories": {
+    "default": { "appenders": ["out"], "level": "error" }
+  }
+},
+  "server":
+  {
+  "port" : "",
+  "LoggingDir" : "./logs/",
+  "QueryRespCount" : "101"
+  }
+}
+
+=====End Config json====
+
+====Server.js=======
+
+//CR5206
+const express = require('express');
+const bodyParser = require('body-parser');
+const fs = require('fs');
+const router = require('express').Router();
+const path = require('path');
+//var config = require('./config');
+const APIcalllogger = require('morgan');
+const morgon_json = require('morgan-json');
+const moment = require('moment');
+var cronJob = require('cron').CronJob;
+
+const appconfig = require('./server/appconfig');
+const config = appconfig.readconfig();
+var port = config.server.port;
+var LoggingDir = config.server.LoggingDir;
+
+if(LoggingDir == undefined)
+LoggingDir = "./logs/";
+
+if ( !fs.existsSync( LoggingDir ) ) {
+	// Create the directory if it does not exist
+	fs.mkdirSync( LoggingDir );
+}
+
+if(port == undefined)
+port = "12162";
+
+console.log("Serve running on port:" + port);
+//var port = 1337;
+
+var app = express();
+
+app.set('json spaces',2);
+// app.set('superSecret',""); //Secrete Variable. You can get it from config.
+
+//Log all api calls
+var currntdate = moment(new Date()).format("YYYY-MM-DD");
+var logDir = LoggingDir + currntdate;
+if ( !fs.existsSync( logDir ) ) {
+	// Create the directory if it does not exist
+	fs.mkdirSync( logDir );
+}
+var logfilename = logDir + "/" + currntdate + "_access.log";
+var accesslog = fs.createWriteStream(logfilename,{flags:'a'});
+const api_log_format = morgon_json(':date[web] :method :url :remote-addr :status :res[content-length] bytes :response-time ms');
+app.use(APIcalllogger(api_log_format,{stream:accesslog}));
+
+//change date wise logfile
+var loginJob = new cronJob({
+	cronTime : '10 00 00 * * *',	
+    onTick : updateLogFile,
+    start : true,
+    timezone : 'Asia/Kolkata'
+});
+
+function updateLogFile(){
+	currntdate = moment(new Date()).format("YYYYMMDD");
+	logDir = LoggingDir + currntdate;
+	if ( !fs.existsSync( logDir ) ) {
+		// Create the directory if it does not exist
+		fs.mkdirSync( logDir );
+	}
+	
+	logfilename = logDir + "/" + currntdate + "_access.log";	
+}
+
+//Use Body parser so we get info from Post and/or URL Parameters. 
+app.use(bodyParser.urlencoded({extended:false}));
+app.use(bodyParser.json());
+
+
+
+//Allowing Cross reference for data sharing.
+app.use( function(req,res,next){
+	res.header("Access-Control-Allow-Origin","*");	
+	res.header("Access-Control-Allow-Headers","Origin,X-Requested-With, Content-Type, Accept");
+	next();
+});
+
+
+//API handler
+ var APIHandler = require('./server/APIHandler');
+ app.post('/api/login', APIHandler.userLogin);
+ app.post('/api/changepassword', APIHandler.changePassword);
+ app.post('/api/updatepassword', APIHandler.updatePassword);
+
+ 
+app.listen(port,'0.0.0.0');
+console.log("server started");
+
+
+=====End Server ==========
+
+=Logger.js=====
+const FILE_NAME = ' logging.js ';
+
+const log4js = require('log4js');
+var moment = require('moment');
+
+const fs = require('fs');
+//Added for writing logs in JSON format(Custom layout  https://github.com/nomiddlename/log4js-node/blob/master/docs/layouts.md)
+log4js.addLayout('json', function (config) {
+    return function (logEvent) { return JSON.stringify(logEvent) + config.separator; }
+});
+
+
+//fetch logging configuaration from config file and if not available then start with default config.
+var appconfig = require('./appconfig');
+var configuration = appconfig.readconfig();
+
+if (configuration.LoggingConf != undefined)
+    configuration.LoggingConf = {
+        appenders: {
+            out: { type: 'file', filename: 'out.log', layout: { type: 'json', separator: ',' } }
+        },
+        categories: {
+            default: { appenders: ['out'], level: 'error' }
+        }
+    };
+
+//create date wise for logging.
+var LoggingDir = configuration.server.LoggingDir;
+if(LoggingDir == undefined)
+LoggingDir = "./logs/";
+
+
+var currntdate = moment(new Date()).format("YYYY-MM-DD");
+var logDir = LoggingDir + currntdate;
+
+if (!fs.existsSync(logDir)) {
+    // Create the directory if it does not exist
+    fs.mkdirSync(logDir);
+}
+var defaultLog = logDir + "/" + currntdate + "_out.log";
+
+
+//create date wise for logging.
+configuration.LoggingConf.appenders.out.filename = defaultLog;
+log4js.configure(configuration.LoggingConf);
+
+var defaultLogger = log4js.getLogger('out');
+
+module.exports = moduleWiseLog;
+
+
+function moduleWiseLog() {
+    var _module = "";
+    var _level = "error";
+    var _logger;
+
+    //Logger instance for perticular module is created and logging level is set.
+    function initialize(module, level) {
+        const FUNC_NAME = " moduleWiseLog.initialize() ";
+        try {            
+            if (module != undefined) {
+                _module = module;
+                var logFileName = logDir + "/" + currntdate + "_" + _module + "_out.log";
+                if (level != undefined)
+                    _level = level;
+
+                configuration.LoggingConf.appenders[module] = { type: 'file', filename: logFileName, layout: { type: 'json', separator: ',' } };
+                configuration.LoggingConf.categories[module] = { appenders: [module], level: level };
+                log4js.configure(configuration.LoggingConf);
+                _logger = log4js.getLogger(_module);
+            }
+            else {
+                //Failed to create log file for unkown module.
+                defaultLogger.error("Failed to create log file for unkown module." + FUNC_NAME + FILE_NAME)
+            }
+        } catch (err) {
+            defaultLogger.fatal(err.message + FUNC_NAME + FILE_NAME);
+        }
+
+    }
+
+    //set logging level dynamically for run time debuging.
+    function setLevel(level) {
+        const FUNC_NAME = " moduleWiseLog.setLevel() ";
+        try {            
+            _level = level;
+            _logger.level = level;
+        } catch (err) {
+            defaultLogger.fatal(err.message + FUNC_NAME + FILE_NAME);
+        }
+    }
+
+    //write logs module wise.
+    function writeLog(msg, data, level) {
+        const FUNC_NAME = " moduleWiseLog.writeLog() ";
+        try {            
+            switch (level) {
+                case 'debug': {
+                    _logger.debug(msg, data);
+                    // console.log(_module + " debug:" + msg + " data:" + data);
+                } break;
+                case 'info': {
+                    if (_level == 'trace') {
+                        _logger.trace(msg, data);
+                        // console.log(_module +  " trace:" + msg + " data:" + data);
+                    }
+                    else {
+                        _logger.info(msg);
+                        // console.log(_module +  " info:" + msg + " data:" + data);
+                    }
+                    
+                } break;
+                case 'warn': {
+                    _logger.warn(msg);
+                    // console.log(_module +  " warn:" + msg);
+                } break;
+                case 'error': {
+                    _logger.error(msg);
+                    console.log(_module +  " error:" + msg);
+                } break;
+                case 'fatal': {
+                    _logger.fatal(msg);
+                    console.log(_module +  " fatal:" + msg);
+                } break;
+                default: {
+                    _logger.error(msg);
+                    // console.log(_module +  " default:" + msg);
+                }
+            }
+        } catch (err) {
+            defaultLogger.fatal(err.message + FUNC_NAME + FILE_NAME);
+        }
+    }
+
+    //write to default log
+    function writeToDefaultLog(msg, data, level) {
+        const FUNC_NAME = " moduleWiseLog.writeLog() ";
+        try {            
+            defaultLogger.fatal(msg);
+        } catch (err) {
+            defaultLogger.fatal(err.message + FUNC_NAME + FILE_NAME);
+        }
+    }
+
+    return {
+        initialize: initialize,
+        setLevel: setLevel,
+        writeLog: writeLog,
+        writeToDefaultLog: writeToDefaultLog
+    }
+}
+=========Logger.js End ==================
+
+========AppConfig.js======
+var fs = require('fs');
+module.exports = {
+    readconfig : function () {
+        try {
+            var configFile = 'config.json';
+            var data = fs.readFileSync(configFile, "utf8");
+            var config = JSON.parse(data.toString('utf8').replace(/^\uFEFF/, ''));
+            return config;          
+        } catch (err) {
+            console.error(err);
+             throw new Error("Config file not found....");
+        }
+    }
+}
+======End Of App Config.js========
+
+
+====APIHandler.js ====
+
+const FILE_NAME = ' APIHandler.js ';
+const DBConnection = require('./DBOperations/MySQLOperations');  //Database operations 
+
+
+module.exports = {
+
+    myloginfunction: function (request, response) {
+        const FUNC_NAME = " userLogin() ";
+        try {
+            var user = request.body.user;
+            if (user == undefined) {
+                // logger.writeLog("Update keepalive called for unkown mode from host:" + sIP + FUNC_NAME + FILE_NAME, dummyData, 'error');
+                console.log("invalide user name." + FUNC_NAME)
+                response.status(300).send(null);
+                return;
+            }
+           // var query = "select * from tbl_UsersLogin where sUserName = '" + user + "';";
+           var query ='';
+            DBConnection.executequery(query).then(function (resp) {
+                // logger.writeLog("KeepAlive updated successfully . " + FUNC_NAME + FILE_NAME, JSON.stringify(resp), 'info');
+                //   console.log(resp);
+                response.send(resp[0]);
+
+            }).catch(function (err) {
+                console.log(err.message + FUNC_NAME);
+                response.status(300).send(null);
+                // logger.writeLog(err.message + " errno : " + err.errno + FUNC_NAME + FILE_NAME, dummyData, 'error');
+            });
+
+        } catch (err) {
+            console.log(err.message + FUNC_NAME);
+            response.status(300).send(null);
+            // logger.writeLog(err.message + FUNC_NAME + FILE_NAME, dummyData, 'fatal');
+        }
+    },
+
+
+
+
+ }
+
+
+
+==============End of API Handler==========
